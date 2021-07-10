@@ -1,0 +1,47 @@
+name: Configure
+
+on:
+  workflow_dispatch:
+    inputs:
+      port:
+        description: "Port that the app runs on"
+        required: true
+        default: 3000
+      site:
+        description: "The nginx site to configure on"
+        required: true
+        default: apps.callumh.io
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup deploy folder
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            rm -rf ~/node_apps/${{ github.event.repository.name }}
+            mkdir -p ~/node_apps/${{ github.event.repository.name }}
+            cd ~/node_apps/${{ github.event.repository.name }}
+            echo ${{github.event.repository.clone_url}}
+            git clone ${{ github.event.repository.clone_url }} .
+            npm install --production
+            pm2 delete ${{ github.event.repository.name }} 2> /dev/null || true
+            pm2 start index.js --name ${{ github.event.repository.name }}
+      - name: Configure nginx
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            export nginx_file=/etc/nginx/sites-available/${{ github.event.inputs.site }}
+            if grep -q "${{ github.event.repository.name }}" $nginx_file; then echo "Nginx location already configured."; else sudo sed -i "/App Locations/a location ${{ github.event.repository.name }}\/ { proxy_pass http://localhost:${{ github.event.inputs.port }}; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \'upgrade\'; proxy_set_header Host \$host; proxy_cache_bypass \$http_upgrade; }" $nginx_file; fi;
+            sudo npm install -g nginxbeautifier
+            sudo nginxbeautifier -s 4 -i $nginx_file
+            sudo systemctl restart nginx
